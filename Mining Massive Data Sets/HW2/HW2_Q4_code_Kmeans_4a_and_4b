@@ -1,0 +1,676 @@
+Q4a.
+package edu.stanford.cs246.kmeansclustering;
+
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.util.Tool;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.UnsupportedEncodingException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.StringTokenizer;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+
+public class KMeansClustering extends Configured implements Tool {
+    
+   private static double[][] dataVecs;
+   private static double[][] clusterVecs;
+   private static double costP=0;
+   private static HashSet<Integer> oldClus;
+   
+   
+   
+    
+    
+   public static void main(String[] args) throws Exception {
+      System.out.println(Arrays.toString(args));
+      int res = ToolRunner.run(new Configuration(), new KMeansClustering(), args);
+      
+      System.exit(res);
+   }
+   
+   private static void readLines(String f,double[][] vec){
+       
+    try {
+ BufferedReader br = new BufferedReader(new FileReader(f));
+        String dataVec=br.readLine();
+        int p=0;
+        while(dataVec!=null){
+            
+            StringTokenizer dims=new StringTokenizer(dataVec);
+            int q=0;
+            
+            while(dims.hasMoreTokens()){
+                
+                vec[p][q]=Double.parseDouble(dims.nextToken());
+                q++;
+            }
+            dataVec=br.readLine();
+            p++;
+        }
+        br.close();
+        
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   private static void indexCreate(double[][] dataVecs, String f){
+       
+       try {
+        Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f),"utf-8"));
+
+        for(int p=0;p<dataVecs.length;p++){
+            writer.write(p+"\n");
+        }writer.close();
+       
+       }  catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   
+   private static double[] getCent(double[][] vecs,ArrayList<Integer> ids){
+       double[] cent=new double[58];
+       if(ids.size()==0) {
+           return cent;
+       }
+       for(int s=0;s<58;s++){
+           double d=0.0;
+           for(int t=0;t<ids.size();t++){
+               int id=ids.get(t);
+               d=d+vecs[id][s];
+           }
+           d=d/(double)ids.size();
+           cent[s]=d;
+       }
+       return cent;
+      
+   }
+   
+   private static void newClus(HashSet<Integer> oldClus,String output){
+       
+       String f=output+"/part-r-00000";
+       try {
+        Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f,true),"utf-8"));
+        for(int m=0;m<clusterVecs.length;m++){
+            if(!oldClus.contains(new Integer(m))){
+                String vec="";
+                double[] tm=clusterVecs[m];
+                for(int q=0;q<tm.length;q++){
+                    vec=vec+tm[q]+" ";
+                }
+            writer.write(vec+"\n");    
+            }
+        }writer.close();
+       } catch (UnsupportedEncodingException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   
+   private static double distBetPoints(double[] vec1,double[] vec2){
+       double dist=0.0;
+       for(int y=0;y<58;y++){
+           dist+=(vec1[y]-vec2[y])*(vec1[y]-vec2[y]);
+           
+       }
+       return Math.sqrt(dist);
+   }
+
+   @Override
+   public int run(String[] args) throws Exception {
+       
+      String c1=args[0];
+      String c2=args[1];
+      String rawData=args[2];
+      String output=args[3];
+      String indexRef="ind.txt";
+      
+      
+      String iterationIp=c1;
+      dataVecs=new double[4601][58];
+      readLines(rawData,dataVecs);
+      clusterVecs=new double[10][58];
+      indexCreate(dataVecs,indexRef);
+      
+      
+      System.out.println(Arrays.toString(args));
+      
+      ArrayList<Double> subValcostForP = new ArrayList<Double>(20);
+      
+      //Running the logic of k means clustering for 20 iterations
+      
+      for(int p=0;p<20;p++){
+          costP=0;
+          oldClus=new HashSet<Integer>(10);
+          String f=iterationIp;
+          if(p!=0){
+              f=f+"/part-r-00000";
+          }
+          readLines(f,clusterVecs);
+          iterationIp=output+p;
+          
+          Job job = new Job(getConf(), "KMeansClustering");
+          job.setJarByClass(KMeansClustering.class);
+          job.setOutputKeyClass(Text.class);
+          job.setOutputValueClass(IntWritable.class);
+
+          job.setMapperClass(Map.class);
+          job.setReducerClass(Reduce.class);
+
+          job.setInputFormatClass(TextInputFormat.class);
+          job.setOutputFormatClass(TextOutputFormat.class);
+
+          FileInputFormat.addInputPath(job, new Path(indexRef));
+          FileOutputFormat.setOutputPath(job, new Path(iterationIp));
+
+          job.waitForCompletion(true);
+          newClus(oldClus,iterationIp);
+          subValcostForP.add(new Double(costP));
+          
+      }
+     
+      //Cost File Write
+      String costPFile="cost.text";
+      try {
+          Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(costPFile),"utf-8"));
+
+          for(int p=0;p<subValcostForP.size();p++){
+              writer.write(subValcostForP.get(p)+"\n");
+          }writer.close();
+         
+         }  catch (IOException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+      }
+      
+      return 0;
+   }
+   
+   public static class Map extends Mapper<LongWritable,Text,Text, IntWritable> {
+      private final static IntWritable Val = new IntWritable(1);
+      private Text Key =new Text("");
+
+      @Override
+      public void map(LongWritable key, Text value, Context context)
+              throws IOException, InterruptedException {
+         for (String token: value.toString().split("\\s+")) {
+            int dataVec2=Integer.parseInt(token);
+            double minDist=Double.MAX_VALUE;
+            int clusterNum=0;
+            for(int x=0;x<10;x++){
+                double dist= distBetPoints(dataVecs[dataVec2],clusterVecs[x]);
+                if(dist<minDist){
+                    minDist=dist;
+                    clusterNum=x;
+                }
+            }
+            Key.set(clusterNum+"");
+            Val.set(dataVec2);
+       
+            context.write(Key, Val);
+         }
+      }
+   }
+
+   public static class Reduce extends Reducer<Text, IntWritable, Text, Text> {
+      
+      private Text Key = new Text("");
+      private Text Val = new Text("");
+      
+       
+      @Override
+      public void reduce(Text key, Iterable<IntWritable> values, Context context)
+              throws IOException, InterruptedException {
+         
+         ArrayList<Integer> ids=new ArrayList<Integer>();
+         int clusterNum2 = Integer.parseInt(key.toString());
+         
+         for (IntWritable val : values) {
+                 int idsVal=val.get();
+                 ids.add(new Integer(idsVal));
+         }
+         double err=0;
+         for(int h=0;h<ids.size();h++){
+             double distan=0;
+             distan=distBetPoints(clusterVecs[clusterNum2],dataVecs[ids.get(h)]);
+             err=err+(distan*distan); 
+         }
+         costP=costP+err;
+         oldClus.add(new Integer(clusterNum2));
+         double[] cent=getCent(dataVecs,ids);
+         Key.set("");
+         String vecto="";
+         for(int w=0;w<cent.length;w++){
+             vecto=vecto+cent[w]+" ";
+         }
+         Val.set(vecto);
+         
+         context.write(Key,Val);
+      }
+   }
+}
+
+Q4b.
+
+package edu.stanford.cs246.kmeansclustering;
+
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.util.Tool;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.UnsupportedEncodingException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.StringTokenizer;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+
+public class KMeansClustering extends Configured implements Tool {
+    
+   private static double[][] dataVecs;
+   private static double[][] clusterVecs;
+   private static double costP=0;
+   private static HashSet<Integer> oldClus;
+   
+   
+   
+    
+    
+   public static void main(String[] args) throws Exception {
+      System.out.println(Arrays.toString(args));
+      int res = ToolRunner.run(new Configuration(), new KMeansClustering(), args);
+      
+      System.exit(res);
+   }
+   
+   private static void readLines(String f,double[][] vec){
+       
+    try {
+ BufferedReader br = new BufferedReader(new FileReader(f));
+        String dataVec=br.readLine();
+        int p=0;
+        while(dataVec!=null){
+            
+            StringTokenizer dims=new StringTokenizer(dataVec);
+            int q=0;
+            
+            while(dims.hasMoreTokens()){
+                
+                vec[p][q]=Double.parseDouble(dims.nextToken());
+                q++;
+            }
+            dataVec=br.readLine();
+            p++;
+        }
+        br.close();
+        
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   private static void indexCreate(double[][] dataVecs, String f){
+       
+       try {
+        Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f),"utf-8"));
+
+        for(int p=0;p<dataVecs.length;p++){
+            writer.write(p+"\n");
+        }writer.close();
+       
+       }  catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   
+   private static double[] getCent(double[][] vecs,ArrayList<Integer> ids){
+       double[] cent=new double[58];
+       if(ids.size()==0) {
+           return cent;
+       }
+       for(int s=0;s<58;s++){
+           double d=0.0;
+           for(int t=0;t<ids.size();t++){
+               int id=ids.get(t);
+               d=d+vecs[id][s];
+           }
+           d=d/(double)ids.size();
+           cent[s]=d;
+       }
+       return cent;
+      
+   }
+   
+   private static void newClus(HashSet<Integer> oldClus,String output){
+       
+       String f=output+"/part-r-00000";
+       try {
+        Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f,true),"utf-8"));
+        for(int m=0;m<clusterVecs.length;m++){
+            if(!oldClus.contains(new Integer(m))){
+                String vec="";
+                double[] tm=clusterVecs[m];
+                for(int q=0;q<tm.length;q++){
+                    vec=vec+tm[q]+" ";
+                }
+            writer.write(vec+"\n");    
+            }
+        }writer.close();
+       } catch (UnsupportedEncodingException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    } catch (IOException e) {
+        // TODO Auto-generated catch block
+        e.printStackTrace();
+    }
+       
+   }
+   
+   private static double distBetPoints(double[] vec1,double[] vec2){
+       double dist=0.0;
+       for(int y=0;y<58;y++){
+           //dist+=(vec1[y]-vec2[y])*(vec1[y]-vec2[y]);
+           dist+=java.lang.Math.abs((vec1[y]-vec2[y]));
+       }
+       //return Math.sqrt(dist);
+       return dist;
+   }
+
+   @Override
+   public int run(String[] args) throws Exception {
+       
+      String c1=args[0];
+      String c2=args[1];
+      String rawData=args[2];
+      String output=args[3];
+      String indexRef="ind.txt";
+      
+      
+      String iterationIp=c2;
+      dataVecs=new double[4601][58];
+      readLines(rawData,dataVecs);
+      clusterVecs=new double[10][58];
+      indexCreate(dataVecs,indexRef);
+      
+      
+      System.out.println(Arrays.toString(args));
+      
+      ArrayList<Double> subValcostForP = new ArrayList<Double>(20);
+      
+      //Running the logic of k means clustering for 20 iterations
+      
+      for(int p=0;p<20;p++){
+          costP=0;
+          oldClus=new HashSet<Integer>(10);
+          String f=iterationIp;
+          if(p!=0){
+              f=f+"/part-r-00000";
+          }
+          readLines(f,clusterVecs);
+          iterationIp=output+p;
+          
+          Job job = new Job(getConf(), "KMeansClustering");
+          job.setJarByClass(KMeansClustering.class);
+          job.setOutputKeyClass(Text.class);
+          job.setOutputValueClass(IntWritable.class);
+
+          job.setMapperClass(Map.class);
+          job.setReducerClass(Reduce.class);
+
+          job.setInputFormatClass(TextInputFormat.class);
+          job.setOutputFormatClass(TextOutputFormat.class);
+
+          FileInputFormat.addInputPath(job, new Path(indexRef));
+          FileOutputFormat.setOutputPath(job, new Path(iterationIp));
+
+          job.waitForCompletion(true);
+          newClus(oldClus,iterationIp);
+          subValcostForP.add(new Double(costP));
+          
+      }
+     
+      //Cost File Write
+      String costPFile="cost.text";
+      try {
+          Writer writer=new BufferedWriter(new OutputStreamWriter(new FileOutputStream(costPFile),"utf-8"));
+
+          for(int p=0;p<subValcostForP.size();p++){
+              writer.write(subValcostForP.get(p)+"\n");
+          }writer.close();
+         
+         }  catch (IOException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+      }
+      
+      return 0;
+   }
+   
+   public static class Map extends Mapper<LongWritable,Text,Text, IntWritable> {
+      private final static IntWritable Val = new IntWritable(1);
+      private Text Key =new Text("");
+
+      @Override
+      public void map(LongWritable key, Text value, Context context)
+              throws IOException, InterruptedException {
+         for (String token: value.toString().split("\\s+")) {
+            int dataVec2=Integer.parseInt(token);
+            double minDist=Double.MAX_VALUE;
+            int clusterNum=0;
+            for(int x=0;x<10;x++){
+                double dist= distBetPoints(dataVecs[dataVec2],clusterVecs[x]);
+                if(dist<minDist){
+                    minDist=dist;
+                    clusterNum=x;
+                }
+            }
+            Key.set(clusterNum+"");
+            Val.set(dataVec2);
+       
+            context.write(Key, Val);
+         }
+      }
+   }
+
+   public static class Reduce extends Reducer<Text, IntWritable, Text, Text> {
+      
+      private Text Key = new Text("");
+      private Text Val = new Text("");
+      
+       
+      @Override
+      public void reduce(Text key, Iterable<IntWritable> values, Context context)
+              throws IOException, InterruptedException {
+         
+         ArrayList<Integer> ids=new ArrayList<Integer>();
+         int clusterNum2 = Integer.parseInt(key.toString());
+         
+         for (IntWritable val : values) {
+                 int idsVal=val.get();
+                 ids.add(new Integer(idsVal));
+         }
+         double err=0;
+         for(int h=0;h<ids.size();h++){
+             double distan=0;
+             distan=distBetPoints(clusterVecs[clusterNum2],dataVecs[ids.get(h)]);
+             //err=err+(distan*distan); 
+             err=err+(distan);
+         }
+         costP=costP+err;
+         oldClus.add(new Integer(clusterNum2));
+         double[] cent=getCent(dataVecs,ids);
+         Key.set("");
+         String vecto="";
+         for(int w=0;w<cent.length;w++){
+             vecto=vecto+cent[w]+" ";
+         }
+         Val.set(vecto);
+         
+         context.write(Key,Val);
+      }
+   }
+}
+
+Python code to display graphs:
+
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Feb  4 06:28:49 2016
+
+@author: mravi
+"""
+
+from pylab import plot,legend
+
+c1_euclidean=[6.236603453064109E8,
+5.098629082975451E8,
+4.854806818720079E8,
+4.639970116850127E8,
+4.6096926657299644E8,
+4.60537847982768E8,
+4.6031309965354526E8,
+4.600035238894074E8,
+4.59570539317735E8,
+4.5902110334229106E8,
+4.584906561919809E8,
+4.579442325879743E8,
+4.5755800519867676E8,
+4.572901363523021E8,
+4.570505550595627E8,
+4.5689223561535496E8,
+4.567036307370338E8,
+4.5640420301897496E8,
+4.561778005419933E8,
+4.5598687102734566E8]
+
+c2_euclidean=[
+4.3874779002791625E8,
+2.4980393362600306E8,
+1.9449481440631282E8,
+1.6980484145154294E8,
+1.5629574880627608E8,
+1.4909420810896608E8,
+1.425085316196152E8,
+1.3230386940652983E8,
+1.1717096983719075E8,
+1.0854737717857005E8,
+1.0223720331799605E8,
+9.827801574975671E7,
+9.563022612177415E7,
+9.379331405119303E7,
+9.23771319682108E7,
+9.154160625423895E7,
+9.10455738304246E7,
+9.075224010140805E7,
+9.047017018122725E7,
+9.021641617563121E7
+]
+
+plot(c1_euclidean)
+plot(c2_euclidean)
+legend(['c1_euclidean', 'c2_euclidean'], loc='lower center')
+
+
+c1_manhattan=[550117.1420000001,
+464869.27587929746,
+470897.3822772977,
+483914.4091733447,
+489216.07100342895,
+487629.66854997986,
+483711.9232137455,
+475330.7734932314,
+474871.23884636106,
+457232.92011507746,
+447494.3861973505,
+450915.0125766769,
+451250.36707256566,
+451974.5955397494,
+451570.36406995676,
+452739.0113664558,
+453082.7302871838,
+450583.6708602985,
+450368.74931674177,
+449011.36372551904]
+
+c2_manhattan=[1433739.309999996,
+1084488.7769648791,
+973431.7146620417,
+895934.5925630697,
+865128.3352940817,
+845846.6470313501,
+827219.5827561254,
+803590.34560111,
+756039.517276122,
+717332.902543229,
+694587.9252526877,
+684444.5019967913,
+674574.7475478562,
+667409.4699160258,
+663556.627821504,
+660162.7772287577,
+656041.3222947106,
+653036.7540731597,
+651112.4262522736,
+649689.0131843532
+
+]
+
+plot(c1_manhattan)
+plot(c2_manhattan)
+legend(['c1_manhattan', 'c2_manhattan'], loc='upper center')
